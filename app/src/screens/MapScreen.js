@@ -1,12 +1,14 @@
-import React, { useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { Animated, Easing, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { AdBanner } from '../ads/ads';
 import { pressFeedback } from '../audio/sounds';
 import Portrait from '../characters/Portrait';
 import { getHero, getVillain } from '../characters/catalog';
-import { ChevronLeft, Lock, Star } from '../components/Icons';
+import { ChevronLeft, Coin, Lock, Star } from '../components/Icons';
 import { LEVELS } from '../game/levels';
+import { getWorldLevels } from '../game/mapCache';
 import { WORLDS, isBossLevel } from '../game/worlds';
 import { useFrame } from '../hooks/useFrame';
 import { LIGHT } from '../theme';
@@ -46,67 +48,58 @@ function approxLen(ax, ay, bx, by) {
   return Math.sqrt((bx - ax) ** 2 + (by - ay) ** 2) * 1.12;
 }
 
-/** Draws a trail segment; finished links grow in with a soft dash reveal. */
+/**
+ * Trail segment — stable SVG tree (no remount flicker).
+ * One dash-draw anim + static preview; slow ease for a calm reveal.
+ */
 function TrailLink({ ax, ay, bx, by, color, lit, delay }) {
-  const len = approxLen(ax, ay, bx, by);
-  const dash = useRef(new Animated.Value(lit ? 0 : len)).current;
-  const glow = useRef(new Animated.Value(lit ? 1 : 0)).current;
+  const len = Math.max(12, approxLen(ax, ay, bx, by));
+  const dash = `${len} ${len}`;
+  const progress = useRef(new Animated.Value(0)).current;
+  const didRun = useRef(false);
 
   useEffect(() => {
     if (!lit) {
-      dash.setValue(len);
-      glow.setValue(0);
+      didRun.current = false;
+      progress.stopAnimation();
+      progress.setValue(0);
       return undefined;
     }
-    dash.setValue(len);
-    glow.setValue(0);
-    const anim = Animated.parallel([
-      Animated.timing(dash, {
-        toValue: 0,
-        duration: 520,
-        delay,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: false,
-      }),
-      Animated.timing(glow, {
-        toValue: 1,
-        duration: 420,
-        delay: delay + 80,
-        easing: Easing.out(Easing.quad),
-        useNativeDriver: false,
-      }),
-    ]);
+    if (didRun.current) {
+      progress.setValue(1);
+      return undefined;
+    }
+    didRun.current = true;
+    progress.setValue(0);
+    const anim = Animated.timing(progress, {
+      toValue: 1,
+      duration: 1400,
+      delay: delay ?? 0,
+      easing: Easing.bezier(0.33, 0, 0.2, 1),
+      useNativeDriver: false,
+    });
     anim.start();
     return () => anim.stop();
-  }, [lit, delay, len, dash, glow]);
+  }, [lit, delay, progress]);
 
   const d = curveD(ax, ay, bx, by);
   const midX = (ax + bx) / 2;
   const midY = (ay + by) / 2;
-
-  if (!lit) {
-    return (
-      <Path
-        d={d}
-        stroke={color}
-        strokeWidth={3.5}
-        strokeLinecap="round"
-        fill="none"
-        strokeOpacity={0.22}
-        strokeDasharray="5 7"
-      />
-    );
-  }
+  const dashOffset = progress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [len, 0],
+  });
 
   return (
     <>
-      <AnimatedPath
+      <Path
         d={d}
         stroke={color}
-        strokeWidth={7}
+        strokeWidth={3}
         strokeLinecap="round"
         fill="none"
-        strokeOpacity={glow.interpolate({ inputRange: [0, 1], outputRange: [0, 0.28] })}
+        strokeOpacity={0.18}
+        strokeDasharray="3 7"
       />
       <AnimatedPath
         d={d}
@@ -114,15 +107,19 @@ function TrailLink({ ax, ay, bx, by, color, lit, delay }) {
         strokeWidth={4.2}
         strokeLinecap="round"
         fill="none"
-        strokeDasharray={`${len} ${len}`}
-        strokeDashoffset={dash}
+        strokeOpacity={0.95}
+        strokeDasharray={dash}
+        strokeDashoffset={dashOffset}
       />
       <AnimatedCircle
         cx={midX}
         cy={midY}
-        r={3.2}
+        r={2.6}
         fill={color}
-        opacity={glow}
+        opacity={progress.interpolate({
+          inputRange: [0, 0.72, 1],
+          outputRange: [0, 0, 0.9],
+        })}
       />
     </>
   );
@@ -267,23 +264,26 @@ function WorldBanner({ world, locked }) {
   );
 }
 
-function WorldIsland({ world, progress, onPlay }) {
-  const levels = useMemo(
-    () => LEVELS.filter((l) => l.id >= world.levelFrom && l.id <= world.levelTo),
-    [world]
-  );
+function WorldIsland({ world, progress, onPlay, onLayoutY }) {
+  const levels = useMemo(() => getWorldLevels(world.id), [world.id]);
   const [boxW, setBoxW] = useState(0);
   const height = PATH_TOP + Math.max(0, levels.length - 1) * ROW + BOSS_R * 2 + 36;
   const locked = progress.unlocked < world.levelFrom;
   const nodeHalf = NODE_R + 4;
 
   return (
-    <View style={[styles.island, { backgroundColor: world.tint }]}>
+    <View
+      style={[styles.island, { backgroundColor: world.tint }]}
+      onLayout={(e) => onLayoutY?.(world.id, e.nativeEvent.layout.y)}
+    >
       <WorldBanner world={world} locked={locked} />
 
       <View
         style={[styles.pathBox, { height }]}
-        onLayout={(e) => setBoxW(e.nativeEvent.layout.width)}
+        onLayout={(e) => {
+          const w = Math.round(e.nativeEvent.layout.width);
+          setBoxW((prev) => (prev > 0 && Math.abs(prev - w) < 2 ? prev : w));
+        }}
       >
         {boxW > 0 ? (
           <Svg
@@ -305,7 +305,7 @@ function WorldIsland({ world, progress, onPlay }) {
                   by={b.y + nodeHalf}
                   color={world.path}
                   lit={finished}
-                  delay={i * 70}
+                  delay={i * 180}
                 />
               );
             })}
@@ -352,18 +352,60 @@ function WorldIsland({ world, progress, onPlay }) {
   );
 }
 
-export default function MapScreen({ progress, onPlay, onBack, onShop, onStorySeen }) {
+export default function MapScreen({
+  progress,
+  onPlay,
+  onBack,
+  onShop,
+  onStorySeen,
+  focusWorldId,
+}) {
   const insets = useSafeAreaInsets();
   const { colors: C } = useTheme();
+  const scrollRef = useRef(null);
+  const islandY = useRef({});
+  const didScroll = useRef(false);
+
+  const progressWorld =
+    progress.unlocked > (WORLDS[WORLDS.length - 1]?.levelTo || 0)
+      ? WORLDS[0]
+      : WORLDS.find((w) => progress.unlocked >= w.levelFrom && progress.unlocked <= w.levelTo) ||
+        WORLDS[WORLDS.length - 1];
   const focusWorld =
-    WORLDS.find((w) => progress.unlocked >= w.levelFrom && progress.unlocked <= w.levelTo) ||
-    WORLDS[WORLDS.length - 1];
+    (focusWorldId && WORLDS.find((w) => w.id === focusWorldId)) || progressWorld;
+
   const needsStory = !progress.seenStory?.[focusWorld.id];
   const [storyWorld, setStoryWorld] = useState(needsStory ? focusWorld : null);
 
   useEffect(() => {
     if (needsStory && !storyWorld) setStoryWorld(focusWorld);
   }, [needsStory, focusWorld, storyWorld]);
+
+  useEffect(() => {
+    didScroll.current = false;
+  }, [focusWorld.id]);
+
+  const tryScrollToFocus = useCallback(() => {
+    if (didScroll.current || storyWorld) return;
+    const y = islandY.current[focusWorld.id];
+    if (y == null || !scrollRef.current) return;
+    didScroll.current = true;
+    requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({ y: Math.max(0, y - 8), animated: true });
+    });
+  }, [focusWorld.id, storyWorld]);
+
+  const onIslandLayout = useCallback(
+    (id, y) => {
+      islandY.current[id] = y;
+      if (id === focusWorld.id) tryScrollToFocus();
+    },
+    [focusWorld.id, tryScrollToFocus]
+  );
+
+  useEffect(() => {
+    if (!storyWorld) tryScrollToFocus();
+  }, [storyWorld, tryScrollToFocus]);
 
   return (
     <View style={[styles.root, { backgroundColor: C.bg, paddingTop: insets.top }]}>
@@ -395,11 +437,13 @@ export default function MapScreen({ progress, onPlay, onBack, onShop, onStorySee
             pressed && { opacity: 0.8, transform: [{ scale: 0.94 }] },
           ]}
         >
-          <Text style={[styles.seedText, { color: C.ink }]}>✦ {progress.coins ?? 0}</Text>
+          <Coin size={16} />
+          <Text style={[styles.seedText, { color: C.ink }]}>{progress.coins ?? 0}</Text>
         </Pressable>
       </View>
 
       <ScrollView
+        ref={scrollRef}
         contentContainerStyle={{
           paddingBottom: insets.bottom + 20,
           paddingHorizontal: 12,
@@ -408,9 +452,17 @@ export default function MapScreen({ progress, onPlay, onBack, onShop, onStorySee
         showsVerticalScrollIndicator={false}
       >
         {WORLDS.map((w) => (
-          <WorldIsland key={w.id} world={w} progress={progress} onPlay={onPlay} />
+          <WorldIsland
+            key={w.id}
+            world={w}
+            progress={progress}
+            onPlay={onPlay}
+            onLayoutY={onIslandLayout}
+          />
         ))}
       </ScrollView>
+
+      <AdBanner noAds={!!progress.noAds} />
 
       {storyWorld ? (
         <StoryIntro
@@ -445,6 +497,9 @@ const styles = StyleSheet.create({
   mapTitle: { fontSize: 20, fontWeight: '900' },
   mapSub: { fontSize: 11, fontWeight: '700', marginTop: 1 },
   seedPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
     paddingHorizontal: 11,
     paddingVertical: 7,
     borderRadius: 999,

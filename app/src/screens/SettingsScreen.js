@@ -248,7 +248,7 @@ export default function SettingsScreen({
           />
         </Section>
 
-        <Text style={[styles.footer, { color: C.inkFaint }]}>Ringcage · Featherlands</Text>
+        <Text style={[styles.footer, { color: C.inkFaint }]}>Rings Cage · Featherlands</Text>
       </ScrollView>
     </View>
   );

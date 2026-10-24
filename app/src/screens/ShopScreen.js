@@ -1,19 +1,39 @@
 import React, { useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { AdBanner, AdRect, showRewarded, useAds } from '../ads/ads';
 import { playSound, pressFeedback } from '../audio/sounds';
-import { COIN_PRICES, SHOP_OFFERS, todayKey } from '../game/economy';
+import {
+  COIN_PACKS,
+  COIN_PRICES,
+  COIN_REWARDS,
+  REMOVE_ADS,
+  VIDEO_COINS,
+  todayKey,
+  videosLeft,
+} from '../game/economy';
 import { ChevronLeft } from '../components/Icons';
+import RemoveAdsSheet from '../components/RemoveAdsSheet';
 import { useTheme } from '../theme/ThemeContext';
 
 /**
- * Coin shop: earn via ad / daily, optional IAP packs (stubbed until billing is wired).
+ * Coin nest — earn (ad / daily) + remove ads + coin bags (RevenueCat / Play later).
  */
-export default function ShopScreen({ progress, onBack, onClaimDaily, onWatchAd, onBuyPack }) {
+export default function ShopScreen({
+  progress,
+  onBack,
+  onClaimDaily,
+  onWatchAd,
+  onBuyPack,
+  onBuyRemoveAds,
+}) {
   const insets = useSafeAreaInsets();
   const { colors: C } = useTheme();
+  const { rewardedReady } = useAds();
   const [busy, setBusy] = useState(null);
+  const [removeOpen, setRemoveOpen] = useState(false);
   const dailyTaken = progress.dailyClaimDate === todayKey();
+  const left = videosLeft(progress);
 
   const run = async (id, fn) => {
     if (busy) return;
@@ -50,74 +70,133 @@ export default function ShopScreen({ progress, onBack, onClaimDaily, onWatchAd, 
         showsVerticalScrollIndicator={false}
       >
         <Text style={[styles.lead, { color: C.inkSoft }]}>
-          Earn coins free by playing and watching ads. Spend them on hints and extra moves. Paying is
-          optional — never required to finish levels.
+          Earn coins by winning levels, claiming your daily nest, or watching a short ad. Coin bags
+          are optional — never required to finish levels.
         </Text>
 
         <Text style={[styles.section, { color: C.inkSoft }]}>Spend on</Text>
         <View style={styles.spendRow}>
           <SpendChip label="Hint" cost={COIN_PRICES.hint} />
+          <SpendChip label="Hammer" cost={COIN_PRICES.hammer} />
           <SpendChip label="+3 moves" cost={COIN_PRICES.extraMoves} />
-          <SpendChip label="Undo" cost={COIN_PRICES.undo} />
         </View>
 
         <Text style={[styles.section, { color: C.inkSoft, marginTop: 22 }]}>Earn coins</Text>
-        {SHOP_OFFERS.filter((o) => o.kind === 'ad' || o.kind === 'daily').map((offer) => {
-          const disabled = offer.kind === 'daily' && dailyTaken;
-          return (
-            <Pressable
-              key={offer.id}
-              disabled={disabled || !!busy}
-              onPress={() =>
-                run(offer.id, async () => {
-                  if (offer.kind === 'daily') {
-                    const ok = await onClaimDaily();
-                    if (!ok) Alert.alert('Already claimed', 'Come back tomorrow for more nest coins.');
-                    else playSound('twinkle');
-                  } else {
-                    // Stub rewarded ad — replace with AdMob / AppLovin rewarded when ready.
-                    await new Promise((r) => setTimeout(r, 900));
-                    await onWatchAd();
-                    playSound('happy');
-                    Alert.alert('Thanks!', `+${offer.coins} coins added.`);
-                  }
-                })
-              }
-              style={[
-                styles.card,
-                { backgroundColor: C.card, borderColor: C.panelBorder },
-                disabled && styles.cardOff,
-              ]}
-            >
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.cardTitle, { color: C.ink }]}>{offer.title}</Text>
-                <Text style={[styles.cardSub, { color: C.inkSoft }]}>
-                  {disabled ? 'Come back tomorrow' : offer.sub}
-                </Text>
-              </View>
-              {busy === offer.id ? (
-                <ActivityIndicator color={C.accent} />
-              ) : (
-                <View style={[styles.badge, { backgroundColor: C.good }]}>
-                  <Text style={styles.badgeText}>{offer.badge}</Text>
-                </View>
-              )}
-            </Pressable>
-          );
-        })}
 
-        <Text style={[styles.section, { color: C.inkSoft, marginTop: 22 }]}>Coin packs</Text>
+        <Pressable
+          disabled={left <= 0 || !!busy}
+          onPress={() =>
+            run('ad', async () => {
+              if (left <= 0) return;
+              if (!rewardedReady) {
+                Alert.alert('Almost ready', 'Ad is still loading — try again in a moment.');
+                return;
+              }
+              const ok = await showRewarded();
+              if (!ok) {
+                Alert.alert('No reward', 'Watch the whole ad to earn coins.');
+                return;
+              }
+              await onWatchAd();
+              playSound('happy');
+              Alert.alert('Thanks!', `+${VIDEO_COINS} coins for watching the ad.`);
+            })
+          }
+          style={[
+            styles.card,
+            { backgroundColor: C.card, borderColor: C.panelBorder },
+            left <= 0 && styles.cardOff,
+          ]}
+        >
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.cardTitle, { color: C.ink }]}>Watch an ad</Text>
+            <Text style={[styles.cardSub, { color: C.inkSoft }]}>
+              {left <= 0
+                ? 'Come back tomorrow'
+                : `+${VIDEO_COINS} coins · ${left} ads left today`}
+            </Text>
+          </View>
+          {busy === 'ad' ? (
+            <ActivityIndicator color={C.accent} />
+          ) : (
+            <View style={[styles.badge, { backgroundColor: C.accent }]}>
+              <Text style={styles.badgeText}>WATCH AD</Text>
+            </View>
+          )}
+        </Pressable>
+
+        <Pressable
+          disabled={dailyTaken || !!busy}
+          onPress={() =>
+            run('daily', async () => {
+              const ok = await onClaimDaily();
+              if (!ok) Alert.alert('Already claimed', 'Come back tomorrow for more nest coins.');
+              else {
+                playSound('twinkle');
+                Alert.alert('Nest gift!', `+${COIN_REWARDS.dailyNest} coins.`);
+              }
+            })
+          }
+          style={[
+            styles.card,
+            { backgroundColor: C.card, borderColor: C.panelBorder },
+            dailyTaken && styles.cardOff,
+          ]}
+        >
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.cardTitle, { color: C.ink }]}>Daily nest gift</Text>
+            <Text style={[styles.cardSub, { color: C.inkSoft }]}>
+              {dailyTaken
+                ? 'Come back tomorrow'
+                : `+${COIN_REWARDS.dailyNest} coins · once a day`}
+            </Text>
+          </View>
+          {busy === 'daily' ? (
+            <ActivityIndicator color={C.accent} />
+          ) : (
+            <View style={[styles.badge, { backgroundColor: C.good }]}>
+              <Text style={styles.badgeText}>DAILY</Text>
+            </View>
+          )}
+        </Pressable>
+
+        <Text style={[styles.section, { color: C.inkSoft, marginTop: 22 }]}>No ads</Text>
+        <Pressable
+          onPress={() => {
+            pressFeedback();
+            setRemoveOpen(true);
+          }}
+          style={[styles.card, { backgroundColor: C.card, borderColor: C.gold }]}
+        >
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.cardTitle, { color: C.ink }]}>
+              {progress.noAds ? 'Ads removed' : REMOVE_ADS.title}
+            </Text>
+            <Text style={[styles.cardSub, { color: C.inkSoft }]}>
+              {progress.noAds
+                ? 'Thanks for supporting the flock'
+                : `${REMOVE_ADS.sub} · ${REMOVE_ADS.priceLabel}`}
+            </Text>
+          </View>
+          <View style={[styles.badge, { backgroundColor: C.gold }]}>
+            <Text style={[styles.badgeText, { color: '#1a1520' }]}>
+              {progress.noAds ? 'OWNED' : REMOVE_ADS.badge}
+            </Text>
+          </View>
+        </Pressable>
+
+        <Text style={[styles.section, { color: C.inkSoft, marginTop: 22 }]}>Coin bags</Text>
         <Text style={[styles.packNote, { color: C.inkSoft }]}>
-          Real-money packs (coming soon). Ads stay free forever.
+          Optional purchases. Prices finalize when Play Billing / RevenueCat is attached.
         </Text>
-        {SHOP_OFFERS.filter((o) => o.kind === 'iap').map((offer) => (
+        {COIN_PACKS.map((offer) => (
           <Pressable
             key={offer.id}
             onPress={() =>
               run(offer.id, async () => {
                 Alert.alert(
                   'Coming soon',
-                  `${offer.title} (${offer.priceLabel}) will use the App Store / Play Store. For now, earn coins by winning and watching ads.`
+                  `${offer.title} (${offer.priceLabel} · ✦ ${offer.coins.toLocaleString()}) will use Google Play. For now, earn coins free with videos.`
                 );
                 onBuyPack?.(offer.id);
               })
@@ -130,12 +209,27 @@ export default function ShopScreen({ progress, onBack, onClaimDaily, onWatchAd, 
                 {offer.sub} · {offer.priceLabel}
               </Text>
             </View>
-            <View style={[styles.badge, { backgroundColor: C.inkFaint }]}>
+            <View style={[styles.badge, { backgroundColor: C.accent }]}>
               <Text style={styles.badgeText}>{offer.badge}</Text>
             </View>
           </Pressable>
         ))}
+
+        <AdRect noAds={!!progress.noAds} />
       </ScrollView>
+
+      <AdBanner noAds={!!progress.noAds} />
+
+      {removeOpen ? (
+        <RemoveAdsSheet
+          owned={!!progress.noAds}
+          onClose={() => setRemoveOpen(false)}
+          onBuy={async () => {
+            const ok = await onBuyRemoveAds?.();
+            if (ok) setRemoveOpen(false);
+          }}
+        />
+      ) : null}
     </View>
   );
 }

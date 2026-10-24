@@ -7,6 +7,7 @@ import { HeroBay, KidSprite, SpeechBubble } from '../characters';
 import { BOARD_H, BOARD_W } from '../game/levels';
 import { RING_COLORS } from '../theme';
 import { useTheme } from '../theme/ThemeContext';
+import HammerStrike from './HammerStrike';
 import RingShape, { BreakingRingShards } from './RingShape';
 
 const RAD = 180 / Math.PI;
@@ -143,7 +144,7 @@ function TutorialFinger({ game }) {
   );
 }
 
-export default function Board({ game, onTick }) {
+export default function Board({ game, onTick, strikeRing = null, onStrikeImpact, onStrikeDone }) {
   const { colors: C } = useTheme();
   const [box, setBox] = useState({ w: 0, h: 0 });
   const [, force] = useReducer((n) => n + 1, 0);
@@ -350,6 +351,16 @@ export default function Board({ game, onTick }) {
     );
   }
 
+  // Keep strike overlay up after smash frees the ring (otherwise hammer unmounts mid-flight).
+  const strikePosRef = useRef(null);
+  if (strikeRing == null) {
+    strikePosRef.current = null;
+  } else if (scale > 0 && game.rings[strikeRing] && !strikePosRef.current) {
+    const r = game.rings[strikeRing];
+    strikePosRef.current = { x: r.x * scale, y: r.y * scale, boardH: svgH, id: strikeRing };
+  }
+  const showStrike = strikeRing != null && scale > 0 && strikePosRef.current != null;
+
   return (
     <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }} onLayout={onLayout}>
       {scale > 0 ? (
@@ -362,6 +373,16 @@ export default function Board({ game, onTick }) {
           >
             {content}
           </Svg>
+          {showStrike ? (
+            <HammerStrike
+              key={`strike-${strikePosRef.current.id}`}
+              x={strikePosRef.current.x}
+              y={strikePosRef.current.y}
+              boardH={strikePosRef.current.boardH}
+              onImpact={onStrikeImpact}
+              onDone={onStrikeDone}
+            />
+          ) : null}
         </View>
       ) : null}
     </View>

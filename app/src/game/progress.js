@@ -19,6 +19,15 @@ export const DEFAULT_PROGRESS = {
   musicOn: true,
   vibrateOn: true,
   dailyClaimDate: null,
+  /** Rewarded video daily counter */
+  videoAdsDate: null,
+  videoAdsCount: 0,
+  /** Remove-ads purchase (Play / RevenueCat later) */
+  noAds: false,
+  /** Last day the home remove-ads popup was shown (once per day) */
+  removeAdsPromptDate: null,
+  /** Cold starts counted — app-open ads only after the first launch */
+  appLaunchCount: 0,
 };
 
 export async function loadProgress() {

@@ -185,7 +185,7 @@ export class Game {
   }
 
   get interactive() {
-    return this.t >= this.introEnd && !this.won && !this.lost;
+    return this.t >= this.introEnd && !this.won && !this.lost && !this.hammerBusy;
   }
 
   /* ---------- queries ---------- */
@@ -264,6 +264,8 @@ export class Game {
     if (this.isLocked(i)) {
       r.shake = 0.45;
       this.mistakes += 1;
+      // Wrong / locked ring still spends a move.
+      this.moves += 1;
       this.holding(i).forEach((c) => {
         c.flash = 1;
       });
@@ -272,7 +274,11 @@ export class Game {
       this.setVillainExpr('happy', 1.8);
       this.villainPulse = 1;
       this.villainSay = { text: pickVillainTaunt(Math.random()), until: this.t + 1.7 };
+      this.emit('hud', null);
       this.emit('locked', { ring: i });
+      if (this.moves >= this.maxMoves && this.winAt == null) {
+        this.loseCheckAt = this.t + 1.35;
+      }
       return false;
     }
 
@@ -774,7 +780,7 @@ export class Game {
     }
   }
 
-  /* ---------- hint + tutorial ---------- */
+  /* ---------- hint + hammer + tutorial ---------- */
 
   hint() {
     if (this.won || this.lost) return false;
@@ -782,6 +788,54 @@ export class Game {
     if (i < 0) return false;
     this.hintId = i;
     this.hintUntil = this.t + 3.4;
+    return true;
+  }
+
+  /** Pick a cage for the hammer (ready tip → free tip → any). -1 if none. */
+  pickHammerTarget() {
+    if (this.won || this.lost) return -1;
+    let i = this.rings.findIndex((_, idx) => this.isReady(idx));
+    if (i < 0) {
+      i = this.rings.findIndex((r, idx) => !r.freed && this.holding(idx).length === 0);
+    }
+    if (i < 0) {
+      i = this.rings.findIndex((r) => !r.freed);
+    }
+    return i;
+  }
+
+  /**
+   * Hammer power-up: smash one cage open with the break animation.
+   * Prefer calling pickHammerTarget + smashRing after the fly-in anim.
+   */
+  hammer() {
+    if (!this.interactive) return false;
+    const i = this.pickHammerTarget();
+    if (i < 0) return false;
+    return this.smashRing(i);
+  }
+
+  /** Force-release every collar on/from this ring, then shatter it. */
+  smashRing(i) {
+    const r = this.rings[i];
+    if (!r || r.freed) return false;
+    // Slip every collar that holds this cage or that this cage holds.
+    [...this.heldBy(i), ...this.holding(i)].forEach((c) => {
+      if (c.released) return;
+      c.released = true;
+      c.rel = 0;
+      const p = this.collarPoint(c);
+      this.burst(p.x, p.y, this.rings[c.holder]?.color || r.color, 10);
+    });
+    this.setExpr('happy', 1.2);
+    this.setVillainExpr('angry', 1.5);
+    this.villainPulse = 1;
+    this.emit('praise', 'SMASH!');
+    this.emit('hud', null);
+    // Shatter immediately (skip the delayed fly-off).
+    r.flyAt = null;
+    this.startFly(r);
+    this.settle();
     return true;
   }
 

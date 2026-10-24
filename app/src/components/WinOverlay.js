@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
-import { Animated, StyleSheet, View } from 'react-native';
+import { Animated, StyleSheet, Text, View } from 'react-native';
 import { BlurView } from 'expo-blur';
+import { Coin } from './Icons';
 import { useTheme } from '../theme/ThemeContext';
 import GamePanel, { IconButton, PlateStars, PlateText } from './GamePanel';
 
@@ -20,7 +21,6 @@ class SafeBlur extends React.Component {
       <BlurView
         intensity={38}
         tint={this.props.tint}
-        blurMethod="dimezisBlurViewSdk31Plus"
         style={StyleSheet.absoluteFill}
       />
     );
@@ -38,13 +38,15 @@ export default function WinOverlay({
   totalKids,
   levelName,
   isLast,
+  coinsEarned = 0,
   onNext,
   onReplay,
   onMenu,
 }) {
-  const { mode } = useTheme();
+  const { mode, colors: C } = useTheme();
   const fade = useRef(new Animated.Value(0)).current;
   const card = useRef(new Animated.Value(0)).current;
+  const coinPop = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     Animated.timing(fade, { toValue: 1, duration: 420, useNativeDriver: true }).start();
@@ -55,7 +57,15 @@ export default function WinOverlay({
       friction: 6,
       tension: 95,
     }).start();
-  }, [fade, card]);
+    coinPop.setValue(0);
+    Animated.spring(coinPop, {
+      toValue: 1,
+      delay: 280,
+      useNativeDriver: true,
+      friction: 5,
+      tension: 120,
+    }).start();
+  }, [fade, card, coinPop]);
 
   const frostStyle = {
     backgroundColor: mode === 'dark' ? 'rgba(26, 21, 32, 0.78)' : 'rgba(248, 238, 221, 0.7)',
@@ -96,6 +106,31 @@ export default function WinOverlay({
           <PlateText kind="label">FRIENDS SAVED:</PlateText>
           <PlateText kind="good">{`${rescued ?? totalKids}/${totalKids}`}</PlateText>
           <PlateText>{`${moves} ${moves === 1 ? 'MOVE' : 'MOVES'}`}</PlateText>
+          {coinsEarned > 0 ? (
+            <Animated.View
+              style={[
+                styles.earnRow,
+                {
+                  backgroundColor: C.gold + '33',
+                  borderColor: C.gold,
+                  opacity: coinPop,
+                  transform: [
+                    {
+                      scale: coinPop.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [0.7, 1],
+                      }),
+                    },
+                  ],
+                },
+              ]}
+            >
+              <Coin size={22} />
+              <Text style={[styles.earnText, { color: C.ink }]}>
+                You earned +{coinsEarned} coins!
+              </Text>
+            </Animated.View>
+          ) : null}
           <PlateText kind="ask">{isLast ? 'PLAY AGAIN?' : 'NEXT LEVEL?'}</PlateText>
         </GamePanel>
       </Animated.View>
@@ -111,4 +146,16 @@ const styles = StyleSheet.create({
     zIndex: 50,
     elevation: 50,
   },
+  earnRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 10,
+    marginBottom: 4,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 2,
+  },
+  earnText: { fontSize: 15, fontWeight: '900' },
 });

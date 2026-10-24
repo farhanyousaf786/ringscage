@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { maybeShowInterstitial, noteResult } from '../ads/ads';
 import {
   buzz,
   playSound,
@@ -11,7 +12,8 @@ import {
 } from '../audio/sounds';
 import { FailOverlay } from '../characters';
 import Board from '../components/Board';
-import { Bulb, ChevronLeft, Restart } from '../components/Icons';
+import { Bulb, ChevronLeft, Coin, Hammer, Restart } from '../components/Icons';
+import { COIN_PRICES, winCoinReward } from '../game/economy';
 import WinOverlay from '../components/WinOverlay';
 import { Game } from '../game/engine';
 import { LEVELS } from '../game/levels';
@@ -95,8 +97,11 @@ export default function GameScreen({
   onNext,
   onCleared,
   coins = 0,
-  hintCost = 25,
+  hintCost = COIN_PRICES.hint,
+  hammerCost = COIN_PRICES.hammer,
   onSpendHint,
+  onSpendHammer,
+  noAds = false,
 }) {
   const insets = useSafeAreaInsets();
   const { colors: C } = useTheme();
@@ -114,7 +119,29 @@ export default function GameScreen({
   const [lockedMsg, setLockedMsg] = useState(0);
   const [win, setWin] = useState(null);
   const [lost, setLost] = useState(null);
+  const [strikeRing, setStrikeRing] = useState(null);
+  const strikeRingRef = useRef(null);
+
   const [, tick] = useState(0);
+
+  useEffect(() => {
+    strikeRingRef.current = null;
+    setStrikeRing(null);
+    game.hammerBusy = false;
+  }, [runKey, game]);
+
+  // Safety: never leave hammerBusy stuck if the strike overlay is interrupted.
+  useEffect(() => {
+    if (strikeRing == null) return undefined;
+    const t = setTimeout(() => {
+      if (strikeRingRef.current == null) return;
+      game.hammerBusy = false;
+      strikeRingRef.current = null;
+      setStrikeRing(null);
+      tick((n) => n + 1);
+    }, 1600);
+    return () => clearTimeout(t);
+  }, [strikeRing, game]);
 
   const bar = useRef(new Animated.Value(0)).current;
   const toast = useRef(new Animated.Value(0)).current;
@@ -205,6 +232,7 @@ export default function GameScreen({
       }
       if (type === 'won') {
         stopRotateSlide();
+        noteResult();
         setWin(payload);
         onCleared(levelId, payload.stars);
       }
@@ -287,6 +315,19 @@ export default function GameScreen({
       <View style={styles.boardWrap}>
         <Board
           game={game}
+          strikeRing={strikeRing}
+          onStrikeImpact={() => {
+            const idx = strikeRingRef.current;
+            if (idx == null) return;
+            game.smashRing(idx);
+            tick((n) => n + 1);
+          }}
+          onStrikeDone={() => {
+            game.hammerBusy = false;
+            strikeRingRef.current = null;
+            setStrikeRing(null);
+            tick((n) => n + 1);
+          }}
           onTick={() => {
             tick((n) => n + 1);
           }}
@@ -315,20 +356,46 @@ export default function GameScreen({
       </View>
 
       <Animated.View style={[styles.bottom, { opacity: intro }]}>
+        <View style={[styles.coinChip, { backgroundColor: C.card, borderColor: C.panelBorder }]}>
+          <Coin size={16} />
+          <View>
+            <Text style={[styles.coinChipLabel, { color: C.inkSoft }]}>Total</Text>
+            <Text style={[styles.coinChipText, { color: C.ink }]}>{coins}</Text>
+          </View>
+        </View>
+
         <RoundButton
-          label={`Hint ✦${hintCost}`}
+          label={`Hint · ${hintCost}`}
           size={46}
           onPress={() => {
-            if (win) return;
+            if (win || lost) return;
+            const hasHint = game.rings.some((_, idx) => game.isReady(idx));
+            if (!hasHint) return;
             if (onSpendHint && !onSpendHint()) return;
             game.hint();
+            tick((n) => n + 1);
           }}
         >
           <Bulb size={22} color={C.accent} />
         </RoundButton>
-        <Text style={[styles.tipInline, { color: C.inkSoft }]} numberOfLines={2}>
-          {def.tip}
-        </Text>
+
+        <RoundButton
+          label={`Hammer · ${hammerCost}`}
+          size={46}
+          onPress={() => {
+            if (win || lost || strikeRing != null || game.hammerBusy) return;
+            const target = game.pickHammerTarget();
+            if (target < 0) return;
+            if (onSpendHammer && !onSpendHammer()) return;
+            game.hammerBusy = true;
+            strikeRingRef.current = target;
+            setStrikeRing(target);
+            tick((n) => n + 1);
+          }}
+        >
+          <Hammer size={22} color={C.accent} />
+        </RoundButton>
+
         <RoundButton
           label="Restart"
           size={46}
@@ -348,9 +415,16 @@ export default function GameScreen({
           totalKids={game.totalKids}
           levelName={`Level ${levelId}: ${def.name}`}
           isLast={isLast}
-          onNext={onNext}
+          coinsEarned={winCoinReward(win.stars)}
+          onNext={async () => {
+            await maybeShowInterstitial(noAds);
+            onNext?.();
+          }}
           onReplay={() => setRunKey((k) => k + 1)}
-          onMenu={onBack}
+          onMenu={async () => {
+            await maybeShowInterstitial(noAds);
+            onBack?.();
+          }}
         />
       ) : null}
 
@@ -442,15 +516,6 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
   },
   toastText: { color: '#fff', fontSize: 12, fontWeight: '800' },
-  tipInline: {
-    flex: 1,
-    textAlign: 'center',
-    fontSize: 11,
-    lineHeight: 15,
-    fontWeight: '800',
-    paddingHorizontal: 8,
-    paddingTop: 4,
-  },
   bottom: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -458,16 +523,30 @@ const styles = StyleSheet.create({
     marginTop: 8,
     paddingTop: 4,
     paddingBottom: 4,
-    gap: 8,
+    gap: 6,
     overflow: 'visible',
   },
+  coinChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    height: 46,
+    borderRadius: 14,
+    borderWidth: 2,
+    marginTop: 0,
+    minWidth: 72,
+    flexShrink: 0,
+  },
+  coinChipLabel: { fontSize: 9, fontWeight: '800', letterSpacing: 0.3, marginBottom: -1 },
+  coinChipText: { fontSize: 14, fontWeight: '900' },
   roundWrap: {
     alignItems: 'center',
     justifyContent: 'flex-start',
     overflow: 'visible',
   },
   roundWrapLabeled: {
-    minWidth: 64,
+    minWidth: 62,
     minHeight: 68,
   },
   round: {

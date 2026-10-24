@@ -2,10 +2,14 @@ import React, { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { Animated, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Svg, { Rect } from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { AdBanner } from '../ads/ads';
 import { pressFeedback } from '../audio/sounds';
 import Portrait from '../characters/Portrait';
-import { Gear, Lock } from '../components/Icons';
+import EarnCoinsSheet from '../components/EarnCoinsSheet';
+import { Coin, CoinBag, Gear, Lock, NestGift, Play, Shield } from '../components/Icons';
+import RemoveAdsSheet from '../components/RemoveAdsSheet';
 import RingShape from '../components/RingShape';
+import { COIN_REWARDS, REMOVE_ADS, VIDEO_COINS, todayKey, videosLeft } from '../game/economy';
 import { GAP, LEVELS } from '../game/levels';
 import { WORLDS } from '../game/worlds';
 import { useFrame } from '../hooks/useFrame';
@@ -162,7 +166,18 @@ function WorldCard({ world, open, current, colors: C, onPress }) {
   );
 }
 
-function ActionBtn({ label, sub, onPress, primary, colors: C }) {
+/** Last active stage; if every level is cleared, highlight the first stage. */
+function selectedWorld(unlocked) {
+  if (unlocked > LEVELS.length) return WORLDS[0];
+  return (
+    WORLDS.find((w) => unlocked >= w.levelFrom && unlocked <= w.levelTo) ||
+    WORLDS[WORLDS.length - 1]
+  );
+}
+
+function ActionBtn({ label, sub, onPress, primary, colors: C, icon, iconBg, muted }) {
+  const ink = primary ? '#fff' : C.ink;
+  const soft = primary ? 'rgba(255,255,255,0.88)' : C.inkSoft;
   return (
     <Pressable
       onPressIn={() => pressFeedback()}
@@ -170,32 +185,67 @@ function ActionBtn({ label, sub, onPress, primary, colors: C }) {
       style={({ pressed }) => [
         styles.actionBtn,
         primary
-          ? { backgroundColor: C.good }
-          : { backgroundColor: C.card, borderWidth: 2, borderColor: C.panelBorder },
+          ? { backgroundColor: C.good, borderColor: C.goodDark || C.good }
+          : { backgroundColor: C.card, borderColor: C.panelBorder },
+        muted && styles.actionMuted,
         pressed && styles.pressedStrong,
       ]}
     >
-      <Text style={[styles.actionLabel, { color: primary ? '#fff' : C.ink }]}>{label}</Text>
-      {sub ? (
-        <Text style={[styles.actionSub, { color: primary ? 'rgba(255,255,255,0.85)' : C.inkSoft }]}>
-          {sub}
+      <View
+        style={[
+          styles.actionIconWrap,
+          { backgroundColor: iconBg || (primary ? 'rgba(255,255,255,0.22)' : C.panel) },
+        ]}
+      >
+        {icon}
+      </View>
+      <View style={styles.actionCopy}>
+        <Text style={[styles.actionLabel, { color: ink }]} numberOfLines={1}>
+          {label}
         </Text>
-      ) : null}
+        {sub ? (
+          <Text style={[styles.actionSub, { color: soft }]} numberOfLines={2}>
+            {sub}
+          </Text>
+        ) : null}
+      </View>
     </Pressable>
   );
 }
 
-export default function HomeScreen({ progress, onPlay, onContinue, onSettings, onShop }) {
+export default function HomeScreen({
+  progress,
+  onPlay,
+  onSettings,
+  onShop,
+  onClaimDaily,
+  onVideoReward,
+  onBuyRemoveAds,
+  onRemoveAdsPromptShown,
+}) {
   const insets = useSafeAreaInsets();
   const { colors: C } = useTheme();
   const [showAll, setShowAll] = useState(false);
+  const [earnOpen, setEarnOpen] = useState(false);
+  const [removeAdsOpen, setRemoveAdsOpen] = useState(false);
   const title = useRef(new Animated.Value(0)).current;
   const sub = useRef(new Animated.Value(0)).current;
-  const next = Math.min(progress.unlocked, LEVELS.length);
   const coins = progress.coins ?? 0;
-  const currentWorld =
-    WORLDS.find((w) => progress.unlocked >= w.levelFrom && progress.unlocked <= w.levelTo) ||
-    WORLDS[0];
+  const currentWorld = selectedWorld(progress.unlocked);
+  const dailyTaken = progress.dailyClaimDate === todayKey();
+  const vidsLeft = videosLeft(progress);
+  const today = todayKey();
+
+  // Once per day: offer remove-ads popup (if not already purchased).
+  useEffect(() => {
+    if (progress.noAds) return undefined;
+    if (progress.removeAdsPromptDate === today) return undefined;
+    const t = setTimeout(() => {
+      setRemoveAdsOpen(true);
+      onRemoveAdsPromptShown?.(today);
+    }, 900);
+    return () => clearTimeout(t);
+  }, [progress.noAds, progress.removeAdsPromptDate, today, onRemoveAdsPromptShown]);
 
   const visibleWorlds = useMemo(
     () => (showAll ? WORLDS : WORLDS.slice(0, PREVIEW_COUNT)),
@@ -225,7 +275,8 @@ export default function HomeScreen({ progress, onPlay, onContinue, onSettings, o
             pressed && styles.pressed,
           ]}
         >
-          <Text style={[styles.coinBtnText, { color: C.ink }]}>✦ {coins}</Text>
+          <Coin size={16} />
+          <Text style={[styles.coinBtnText, { color: C.ink }]}>{coins}</Text>
           <View style={[styles.coinPlus, { backgroundColor: C.gold }]}>
             <Text style={styles.coinPlusText}>+</Text>
           </View>
@@ -265,7 +316,7 @@ export default function HomeScreen({ progress, onPlay, onContinue, onSettings, o
             },
           ]}
         >
-          Ringcage
+          Rings Cage
         </Animated.Text>
         <Animated.Text style={[styles.subtitle, { color: C.inkSoft, opacity: sub }]}>
           Free the peeps from the cages
@@ -291,7 +342,7 @@ export default function HomeScreen({ progress, onPlay, onContinue, onSettings, o
                 open={progress.unlocked >= w.levelFrom}
                 current={w.id === currentWorld.id}
                 colors={C}
-                onPress={() => onPlay()}
+                onPress={(world) => onPlay?.(world)}
               />
             ))}
           </View>
@@ -317,26 +368,81 @@ export default function HomeScreen({ progress, onPlay, onContinue, onSettings, o
           <ActionBtn
             colors={C}
             primary
-            label="Open map"
-            sub={`Continue from ${currentWorld.name.replace(/^Nest |^Dewdrop |^Berry /, '')}`}
-            onPress={onPlay}
+            icon={<Play size={20} color="#fff" />}
+            label="Watch ad for coins"
+            sub={
+              vidsLeft > 0
+                ? `Short ad · +${VIDEO_COINS} · ${vidsLeft} left today`
+                : 'Come back tomorrow for more ads'
+            }
+            onPress={() => setEarnOpen(true)}
           />
-          {progress.unlocked > 1 ? (
-            <ActionBtn
-              colors={C}
-              label={`Continue level ${next}`}
-              sub="Jump back into your save"
-              onPress={onContinue}
-            />
-          ) : null}
           <ActionBtn
             colors={C}
-            label="Earn coins"
-            sub="Daily nest · ads · shop"
+            muted={dailyTaken}
+            icon={<NestGift size={20} color={dailyTaken ? C.inkFaint : C.accent} />}
+            iconBg={dailyTaken ? C.panel : C.accentLight || C.panel}
+            label={dailyTaken ? 'Daily nest claimed' : 'Daily nest gift'}
+            sub={
+              dailyTaken
+                ? 'Come back tomorrow'
+                : `+${COIN_REWARDS.dailyNest} coins · once a day`
+            }
+            onPress={async () => {
+              if (dailyTaken) return;
+              await onClaimDaily?.();
+            }}
+          />
+          {!progress.noAds ? (
+            <ActionBtn
+              colors={C}
+              icon={<Shield size={20} color={C.goldDark || C.gold} />}
+              iconBg={C.gold + '33'}
+              label="Remove all ads"
+              sub={`No banners or win ads · ${REMOVE_ADS.priceLabel}`}
+              onPress={() => setRemoveAdsOpen(true)}
+            />
+          ) : (
+            <ActionBtn
+              colors={C}
+              icon={<Shield size={20} color={C.good} />}
+              iconBg={C.good + '33'}
+              label="Ads removed"
+              sub="Thanks for supporting the flock"
+              onPress={() => setRemoveAdsOpen(true)}
+            />
+          )}
+          <ActionBtn
+            colors={C}
+            icon={<CoinBag size={20} color={C.accent} />}
+            iconBg={C.accentLight || C.panel}
+            label="Coin nest"
+            sub="Bags of coins · shop"
             onPress={onShop}
           />
         </Animated.View>
       </ScrollView>
+
+      <AdBanner noAds={!!progress.noAds} />
+
+      {earnOpen ? (
+        <EarnCoinsSheet
+          progress={progress}
+          onClose={() => setEarnOpen(false)}
+          onEarned={(n) => onVideoReward?.(n)}
+        />
+      ) : null}
+
+      {removeAdsOpen ? (
+        <RemoveAdsSheet
+          owned={!!progress.noAds}
+          onClose={() => setRemoveAdsOpen(false)}
+          onBuy={async () => {
+            const ok = await onBuyRemoveAds?.();
+            if (ok) setRemoveAdsOpen(false);
+          }}
+        />
+      ) : null}
     </View>
   );
 }
@@ -467,10 +573,22 @@ const styles = StyleSheet.create({
   actionBtn: {
     width: '100%',
     borderRadius: 18,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
+    borderWidth: 2,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: 12,
   },
-  actionLabel: { fontSize: 17, fontWeight: '900' },
+  actionMuted: { opacity: 0.72 },
+  actionIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  actionCopy: { flex: 1, paddingRight: 4 },
+  actionLabel: { fontSize: 16, fontWeight: '900' },
   actionSub: { marginTop: 2, fontSize: 12, fontWeight: '700' },
 });

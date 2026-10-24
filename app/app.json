@@ -1,18 +1,23 @@
 {
   "expo": {
-    "name": "Ringcage",
+    "name": "Rings Cage",
     "slug": "ringcage",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#e8c48e"
+    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.farhanyousaf1996.ringcage"
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#e8c48e",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
@@ -35,7 +40,7 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "backgroundColor": "#f8eedd",
+    "backgroundColor": "#e8c48e",
     "plugins": [
       [
         "expo-audio",
@@ -44,7 +49,29 @@
           "enableBackgroundPlayback": false,
           "enableBackgroundRecording": false
         }
+      ],
+      [
+        "react-native-google-mobile-ads",
+        {
+          "androidAppId": "ca-app-pub-1690469075436631~1114798705",
+          "iosAppId": "ca-app-pub-1690469075436631~1114798705",
+          "delayAppMeasurementInit": true,
+          "userTrackingUsageDescription": "This lets us show relevant ads. Rings Cage stays free either way."
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "extraProguardRules": "-keep class com.google.android.gms.internal.consent_sdk.** { *; }"
+          }
+        }
       ]
     ]
+  },
+  "react-native-google-mobile-ads": {
+    "android_app_id": "ca-app-pub-1690469075436631~1114798705",
+    "ios_app_id": "ca-app-pub-1690469075436631~1114798705",
+    "delay_app_measurement_init": true
   }
 }
