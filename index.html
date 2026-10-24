@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Ringcage — Level 1</title>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@800;900&display=swap" rel="stylesheet" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      height: 100%;
+      font-family: "Nunito", system-ui, sans-serif;
+      background: #f8eedd;
+      overflow: hidden;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .app {
+      height: 100%;
+      max-width: 430px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      padding: 18px 14px 22px;
+      gap: 10px;
+    }
+    .top { display: flex; justify-content: space-between; align-items: center; }
+    .level { font-weight: 900; font-size: 22px; color: #6b5340; }
+    .score {
+      background: #efe3d0; border-radius: 999px; padding: 8px 18px;
+      font-weight: 900; font-size: 20px; color: #6b5340;
+    }
+    canvas { width: 100%; height: 100%; min-height: 0; touch-action: none; cursor: grab; }
+    canvas:active { cursor: grabbing; }
+    .lesson {
+      background: #fff; border: 3px solid #c4a882; border-radius: 18px;
+      padding: 14px 16px; text-align: center;
+      font-size: 15px; font-weight: 800; color: #6b5340; line-height: 1.4;
+    }
+    .toast {
+      position: fixed; left: 50%; bottom: 118px;
+      transform: translateX(-50%) translateY(8px);
+      background: rgba(60,40,25,0.92); color: #fff;
+      padding: 10px 14px; border-radius: 12px;
+      font-size: 13px; font-weight: 800; opacity: 0; transition: 0.2s;
+      z-index: 6; max-width: 88vw; text-align: center;
+    }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+    .praise {
+      position: fixed; left: 50%; top: 34%;
+      transform: translate(-50%, -50%) scale(0.7);
+      font-size: 42px; font-weight: 900; color: #fff;
+      background: #f0a24a; padding: 10px 28px; border-radius: 999px;
+      opacity: 0; pointer-events: none; z-index: 5;
+      transition: 0.28s cubic-bezier(.2,1.3,.3,1);
+    }
+    .praise.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="top">
+      <div class="level">Level 1</div>
+      <div class="score" id="score">0</div>
+    </header>
+    <canvas id="c" width="900" height="900"></canvas>
+    <p class="lesson">
+      Rotate the <b style="color:#e08a1e">orange</b> ring into the correct position to unlock it.<br />
+      Its gap must reach the blue collar.
+    </p>
+  </div>
+  <div class="toast" id="toast"></div>
+  <div class="praise" id="praise">Nice!</div>
+
+  <script>
+    /**
+     * Layout copied from the real tutorial:
+     *
+     *   (blue C, gap LEFT) ──stem──[collar]  (orange C, gap RIGHT)
+     *
+     * - Rings do NOT overlap. They sit side by side.
+     * - Blue owns a short stem that ends in a small COLLAR band.
+     * - The collar wraps around the LEFT side of the orange tube.
+     * - Orange tube passes through the collar → blue is locked.
+     * - Rotate orange until its GAP is at the collar → it slips out → free.
+     */
+    const canvas = document.getElementById("c");
+    const ctx = canvas.getContext("2d");
+    const scoreEl = document.getElementById("score");
+    const toastEl = document.getElementById("toast");
+    const praiseEl = document.getElementById("praise");
+    const W = canvas.width;
+    const H = canvas.height;
+
+    const CY = H * 0.5;
+    const R = 125;          // ring radius (centerline)
+    const T = 42;           // tube thickness
+    const GAP = 1.45;       // opening width (radians, ~83°)
+    const STEM = 70;        // distance between blue's right edge and orange's left edge
+    const SNAP = 0.26;      // how close gap must be to collar
+
+    // Centers so rings sit side by side with STEM between them
+    const BLUE_X = W / 2 - (R + STEM / 2);
+    const ORANGE_X = W / 2 + (R + STEM / 2);
+
+    let blue, orange;
+    let score = 0;
+    let dragging = false;
+    let lastA = 0;
+    let moved = false;
+    let done = false;
+    let particles = [];
+    let pulse = 0;
+
+    function reset() {
+      blue = {
+        x: BLUE_X, y: CY, angle: Math.PI, // gap faces left
+        color: "#3d9bd8", dark: "#2573a8", light: "#7cc4f0",
+        freed: false, fly: 0, vx: 0, vy: 0, shake: 0,
+      };
+      orange = {
+        x: ORANGE_X, y: CY, angle: 0, // gap faces right
+        color: "#e8872a", dark: "#b8601a", light: "#ffbe73",
+        freed: false, fly: 0, vx: 0, vy: 0, shake: 0,
+      };
+      score = 0;
+      scoreEl.textContent = "0";
+      done = false;
+      dragging = false;
+      moved = false;
+      particles = [];
+    }
+
+    function norm(a) {
+      while (a > Math.PI) a -= Math.PI * 2;
+      while (a < -Math.PI) a += Math.PI * 2;
+      return a;
+    }
+
+    /** Collar is fixed in world space at orange's left edge */
+    function collarPos() {
+      return { x: ORANGE_X - R, y: CY };
+    }
+
+    /** Gap center direction (world) = orange.angle. Collar is at angle PI from orange center. */
+    function gapAtCollar() {
+      return Math.abs(norm(orange.angle - Math.PI)) < SNAP;
+    }
+
+    function toast(msg) {
+      toastEl.textContent = msg;
+      toastEl.classList.add("show");
+      clearTimeout(toast._t);
+      toast._t = setTimeout(() => toastEl.classList.remove("show"), 1500);
+    }
+
+    function praise(t) {
+      praiseEl.textContent = t;
+      praiseEl.classList.add("show");
+      clearTimeout(praise._t);
+      praise._t = setTimeout(() => praiseEl.classList.remove("show"), 800);
+    }
+
+    function burst(x, y, color) {
+      for (let i = 0; i < 16; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const sp = 2.5 + Math.random() * 6;
+        particles.push({
+          x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 2,
+          life: 1, color, s: 5 + Math.random() * 7,
+        });
+      }
+    }
+
+    function freeRing(r, dirX) {
+      if (r.freed) return;
+      r.freed = true;
+      r.vx = dirX * 11;
+      r.vy = -6;
+      burst(r.x, r.y, r.color);
+      score += 200;
+      scoreEl.textContent = String(score);
+    }
+
+    function tryUnlock() {
+      if (done || orange.freed || !moved) return;
+      if (!gapAtCollar()) return;
+
+      freeRing(orange, 1);
+      praise("Nice!");
+
+      // collar is empty now → blue is free
+      setTimeout(() => {
+        freeRing(blue, -1);
+        score = 400;
+        scoreEl.textContent = "400";
+        done = true;
+        setTimeout(reset, 1500);
+      }, 500);
+    }
+
+    function pointer(e) {
+      const rect = canvas.getBoundingClientRect();
+      return {
+        x: ((e.clientX ?? e.touches?.[0]?.clientX) - rect.left) * (W / rect.width),
+        y: ((e.clientY ?? e.touches?.[0]?.clientY) - rect.top) * (H / rect.height),
+      };
+    }
+
+    function hitRing(r, p) {
+      const d = Math.hypot(p.x - r.x, p.y - r.y);
+      return Math.abs(d - R) <= T / 2 + 26;
+    }
+
+    canvas.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      if (done) return;
+      const p = pointer(e);
+
+      if (!orange.freed && hitRing(orange, p)) {
+        dragging = true;
+        moved = false;
+        lastA = Math.atan2(p.y - orange.y, p.x - orange.x);
+        try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+        return;
+      }
+
+      if (!blue.freed && hitRing(blue, p)) {
+        blue.shake = 16;
+        toast("Blue is locked — orange is still through its collar");
+      }
+    });
+
+    canvas.addEventListener("pointermove", (e) => {
+      if (!dragging) return;
+      e.preventDefault();
+      const p = pointer(e);
+      const a = Math.atan2(p.y - orange.y, p.x - orange.x);
+      const d = norm(a - lastA);
+      if (Math.abs(d) > 0.012) moved = true;
+      orange.angle = norm(orange.angle + d);
+      lastA = a;
+      tryUnlock();
+    });
+
+    function endDrag() {
+      if (dragging) tryUnlock();
+      dragging = false;
+    }
+    canvas.addEventListener("pointerup", endDrag);
+    canvas.addEventListener("pointercancel", endDrag);
+
+    /* ---------------- drawing ---------------- */
+    function roundRect(x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+    }
+
+    function drawC(r, glow) {
+      if (r.freed && r.fly > 1.4) return;
+      if (r.freed) {
+        r.x += r.vx; r.y += r.vy; r.vy += 0.5; r.fly += 0.04;
+      }
+      const alpha = r.freed ? Math.max(0, 1 - r.fly) : 1;
+      const sh = r.shake ? Math.sin(r.shake * 2.2) * 0.05 : 0;
+      if (r.shake) r.shake = Math.max(0, r.shake - 0.55);
+
+      const half = GAP / 2;
+      const a0 = half;
+      const a1 = Math.PI * 2 - half;
+
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.translate(r.x, r.y);
+      ctx.rotate(r.angle + sh);
+
+      if (glow) {
+        ctx.beginPath();
+        ctx.arc(0, 0, R, a0, a1);
+        ctx.lineWidth = T + 16;
+        ctx.lineCap = "round";
+        ctx.strokeStyle = glow;
+        ctx.stroke();
+      }
+
+      // drop shadow
+      ctx.beginPath();
+      ctx.arc(3, 6, R, a0, a1);
+      ctx.lineWidth = T;
+      ctx.lineCap = "round";
+      ctx.strokeStyle = "rgba(90,55,20,0.18)";
+      ctx.stroke();
+
+      // dark edge
+      ctx.beginPath();
+      ctx.arc(0, 0, R, a0, a1);
+      ctx.lineWidth = T;
+      ctx.lineCap = "round";
+      ctx.strokeStyle = r.dark;
+      ctx.stroke();
+
+      // main color (slightly thinner so dark edge shows)
+      ctx.beginPath();
+      ctx.arc(0, 0, R, a0, a1);
+      ctx.lineWidth = T - 8;
+      ctx.lineCap = "round";
+      ctx.strokeStyle = r.color;
+      ctx.stroke();
+
+      // light highlight on the inside curve
+      ctx.beginPath();
+      ctx.arc(0, 0, R - 8, a0 + 0.06, a1 - 0.06);
+      ctx.lineWidth = 9;
+      ctx.lineCap = "round";
+      ctx.strokeStyle = r.light;
+      ctx.globalAlpha = alpha * 0.75;
+      ctx.stroke();
+
+      ctx.restore();
+    }
+
+    /** Thin stem from blue's right edge to the collar */
+    function drawStem() {
+      if (blue.freed) return;
+      const c = collarPos();
+      const x0 = blue.x + R;     // blue's rightmost point
+      const x1 = c.x - 6;        // just into the collar
+      ctx.save();
+      ctx.fillStyle = "rgba(90,55,20,0.18)";
+      roundRect(x0, CY - 8 + 3, x1 - x0, 16, 6);
+      ctx.fill();
+      ctx.fillStyle = blue.dark;
+      roundRect(x0, CY - 8, x1 - x0, 16, 6);
+      ctx.fill();
+      ctx.fillStyle = blue.color;
+      roundRect(x0, CY - 5, x1 - x0, 10, 5);
+      ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,0.45)";
+      roundRect(x0 + 4, CY - 4, (x1 - x0) * 0.5, 4, 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    /** Collar band wrapped around orange's left tube (drawn on top) */
+    function drawCollar() {
+      if (blue.freed || orange.freed) return;
+      const c = collarPos();
+      const w = T + 14;   // across the tube
+      const h = 34;       // along the tube
+
+      ctx.save();
+      // shadow
+      ctx.fillStyle = "rgba(60,30,10,0.28)";
+      roundRect(c.x - w / 2 + 2, c.y - h / 2 + 5, w, h, 8);
+      ctx.fill();
+
+      // body
+      const g = ctx.createLinearGradient(c.x - w / 2, 0, c.x + w / 2, 0);
+      g.addColorStop(0, blue.light);
+      g.addColorStop(0.5, blue.color);
+      g.addColorStop(1, blue.dark);
+      ctx.fillStyle = g;
+      roundRect(c.x - w / 2, c.y - h / 2, w, h, 8);
+      ctx.fill();
+
+      // dark edge
+      ctx.strokeStyle = blue.dark;
+      ctx.lineWidth = 3;
+      roundRect(c.x - w / 2, c.y - h / 2, w, h, 8);
+      ctx.stroke();
+
+      // top band highlight
+      ctx.fillStyle = "rgba(255,255,255,0.4)";
+      roundRect(c.x - w / 2 + 5, c.y - h / 2 + 4, w - 10, 6, 3);
+      ctx.fill();
+
+      ctx.restore();
+    }
+
+    function frame() {
+      pulse += 0.05;
+      ctx.clearRect(0, 0, W, H);
+
+      // order: blue, stem, orange, collar on top (orange tube passes through collar)
+      drawC(blue, null);
+      drawStem();
+
+      const glow = !orange.freed
+        ? (dragging
+            ? "rgba(255,235,140,0.55)"
+            : `rgba(255,235,140,${0.3 + Math.sin(pulse) * 0.15})`)
+        : null;
+      drawC(orange, glow);
+
+      drawCollar();
+
+      // finger hint pointing at orange's right end
+      if (!orange.freed && !dragging && !moved) {
+        const ex = orange.x + Math.cos(orange.angle + GAP / 2) * R;
+        const ey = orange.y + Math.sin(orange.angle + GAP / 2) * R;
+        ctx.save();
+        ctx.font = "46px serif";
+        ctx.globalAlpha = 0.95;
+        ctx.fillText("👆", ex + 6, ey + 40 + Math.sin(pulse) * 6);
+        ctx.restore();
+      }
+
+      // feedback when close
+      if (!orange.freed && moved) {
+        const diff = Math.abs(norm(orange.angle - Math.PI));
+        if (diff < 0.8) {
+          ctx.save();
+          ctx.globalAlpha = Math.max(0.3, 1 - diff);
+          ctx.fillStyle = "#1f8a45";
+          ctx.font = "800 18px Nunito";
+          ctx.textAlign = "center";
+          ctx.fillText(diff < SNAP ? "UNLOCK!" : "almost…", orange.x, orange.y - R - 44);
+          ctx.restore();
+        }
+      }
+
+      particles = particles.filter((p) => p.life > 0);
+      for (const p of particles) {
+        p.x += p.vx; p.y += p.vy; p.vy += 0.22; p.life -= 0.028;
+        ctx.globalAlpha = Math.max(0, p.life);
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y - p.s);
+        ctx.lineTo(p.x + p.s * 0.7, p.y);
+        ctx.lineTo(p.x, p.y + p.s);
+        ctx.lineTo(p.x - p.s * 0.7, p.y);
+        ctx.closePath();
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+
+      requestAnimationFrame(frame);
+    }
+
+    reset();
+    frame();
+  </script>
+</body>
+</html>

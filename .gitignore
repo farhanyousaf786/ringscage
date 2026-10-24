@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Expo / Metro
+.expo/
+dist/
+web-build/
+*.jks
+*.p8
+*.p12
+*.mobileprovision
+*.orig.*
+
+# Native build
+app/android/app/build/
+app/android/.gradle/
+app/android/build/
+app/ios/build/
+app/ios/Pods/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+*.keystore
+google-services.json
+GoogleService-Info.plist
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.log
+npm-debug.*
+
+# Tests / coverage
+coverage/
+.turbo/
